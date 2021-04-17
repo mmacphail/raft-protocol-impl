@@ -65,6 +65,8 @@ public class NodeRequestQueue {
                         node.onVoteRequest((VoteRequest) message);
                     } else if (message instanceof VoteResponse) {
                         node.onVoteResponse((VoteResponse) message);
+                    } else if (message instanceof DataMessage) {
+                        node.broadcastMessage(message);
                     }
                 }
                 Thread.sleep(100);

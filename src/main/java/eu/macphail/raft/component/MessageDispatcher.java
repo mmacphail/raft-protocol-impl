@@ -53,6 +53,8 @@ public class MessageDispatcher {
             url += "/vote/request";
         } else if(message instanceof VoteResponse) {
             url += "/vote/response";
+        } else if(message instanceof DataMessage) {
+            url += "/data";
         }
 
         try {

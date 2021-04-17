@@ -1,10 +1,7 @@
 package eu.macphail.raft.boundary;
 
 import eu.macphail.raft.component.NodeRequestQueue;
-import eu.macphail.raft.entity.message.LogRequest;
-import eu.macphail.raft.entity.message.LogResponse;
-import eu.macphail.raft.entity.message.VoteRequest;
-import eu.macphail.raft.entity.message.VoteResponse;
+import eu.macphail.raft.entity.message.*;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,5 +33,10 @@ public class NodeApi {
     @PostMapping("/log/response")
     public void logResponse(@RequestBody LogResponse logResponse) {
         nodeRequestQueue.addToQueue(logResponse);
+    }
+
+    @PostMapping("/data")
+    public void postData(@RequestBody DataMessage dataMessage) {
+        nodeRequestQueue.addToQueue(dataMessage);
     }
 }

@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -79,6 +80,7 @@ public class Node {
         Random rng = new Random();
         electionTimerTimeoutMs += rng.nextInt(1500);
         launchElectionTimer();
+        launchReplicateLogTimer();
     }
 
     private Map<Integer, Integer> initNodesMap() {
@@ -157,7 +159,6 @@ public class Node {
                     ackedLength.put(follower, 0);
                     replicateLog(this.nodeId, follower);
                 });
-                launchReplicateLogTimer();
             }
         } else if (term > currentTerm) {
             currentTerm = term;
@@ -171,7 +172,7 @@ public class Node {
         int leaderId = logRequest.getLeaderId();
         int term = logRequest.getTerm();
         int logLength = logRequest.getLogLength();
-        int leaderCommit = logRequest.getLeaderCommit();
+        int leaderCommit = logRequest.getCommitLength();
         List<Log> entries = logRequest.getEntries();
 
         LOG.debug("Received log request from {} at term {} (self term is {})", leaderId, term, currentTerm);
@@ -192,6 +193,10 @@ public class Node {
                 && (logLength == 0
                 || term == log.get(logLength - 1).getTerm());
         if (term == currentTerm && logOk) {
+            // We assume this node is the leader
+            // This is a modification from Martin's algorithm
+            currentLeader = leaderId;
+            LOG.debug("Accepting node {} as leader", currentLeader);
             appendEntries(logLength, leaderCommit, entries);
             int ack = logLength + entries.size();
             dispatcher.dispatch(leaderId, new LogResponse(nodeId, currentTerm, ack, true));
@@ -243,19 +248,24 @@ public class Node {
     }
 
     private void appendEntries(int logLength, int leaderCommit, List<Log> entries) {
-        if (entries.size() > 0 && log.size() > entries.size()) {
+        LOG.debug("Appending entries logLength: {}, leaderCommit: {}, entries: {}", logLength, leaderCommit, entries);
+        LOG.debug("Current log is: {}", log);
+        LOG.debug("Current commit length is: {}", commitLength);
+        if (entries.size() > 0 && log.size() > logLength) {
             if (log.get(logLength).getTerm() != entries.get(0).getTerm()) {
+                LOG.debug("Truncating log to {}", logLength - 1);
                 truncateLog(logLength - 1);
             }
         }
         if (logLength + entries.size() > log.size()) {
-            for (int i = log.size() - entries.size(); i < entries.size(); i++) {
+            LOG.debug("Appending entries from index {} to log", log.size() - logLength);
+            for (int i = log.size() - logLength; i < entries.size(); i++) {
                 appendEntryToLog(entries.get(i));
             }
         }
         if (leaderCommit > commitLength) {
             for (int i = commitLength; i < leaderCommit; i++) {
-                dispatcher.deliver(entries.get(i).getData());
+                dispatcher.deliver(log.get(i).getData());
             }
             commitLength = leaderCommit;
         }
@@ -268,12 +278,11 @@ public class Node {
     public synchronized void broadcastMessage(NodeMessage nodeMessage) {
         if (currentRole == Role.LEADER) {
             saveToLog(nodeMessage);
+            LOG.debug("New log: {}", log);
             ackedLength.put(nodeId, log.size());
 
             followers().forEach(follower -> replicateLog(nodeId, follower));
-
-            LOG.debug("Sent message {}", nodeMessage);
-            LOG.debug("New log: {}", log);
+            LOG.debug("Replicated new log");
         } else {
             dispatcher.forwardToLeader(currentLeader, nodeMessage);
         }
@@ -290,9 +299,10 @@ public class Node {
         try {
             Log l = new Log();
             l.setNodeId(nodeId);
-            l.setLogOffset(l.getLogOffset() + 1);
+            l.setLogOffset(log.size());
             l.setTerm(currentTerm);
-            objectMapper.writeValueAsString(nodeMessage);
+            String data = objectMapper.writeValueAsString(nodeMessage);
+            l.setData(data.getBytes(StandardCharsets.UTF_8));
             logRepository.save(l);
             loadLog();
         } catch (JsonProcessingException e) {
@@ -321,18 +331,24 @@ public class Node {
     }
 
     private void replicateLog(int leaderId, int followerId) {
+        LOG.debug("Replicating log on {} (leader: {}) to follower: {}", nodeId, leaderId, followerId);
         int i = sentLength.get(followerId);
+        LOG.debug("Log sent to follower: {}", i);
         List<Log> entries = getEntriesFromLog(i);
+        LOG.debug("Entries from {}: {}", i, entries);
         int prevLogTerm = 0;
         if (i > 0) {
             prevLogTerm = log.get(i - 1).getTerm();
         }
+        LOG.debug("Previous log term: {}", prevLogTerm);
+        LOG.debug("Dispatching log request to follower: {}", followerId);
         dispatcher.dispatch(followerId, new LogRequest(leaderId, currentTerm, i, prevLogTerm, commitLength, entries));
     }
 
     private List<Log> getEntriesFromLog(int index) {
+        LOG.debug("Get entries from log index: {}, log: {}", index, log);
         List<Log> l = new ArrayList<>();
-        for (int i = index; i < log.size() - 1; i++) {
+        for (int i = index; i < log.size(); i++) {
             l.add(log.get(i));
         }
         return l;

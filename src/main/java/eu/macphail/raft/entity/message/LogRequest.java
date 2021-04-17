@@ -9,18 +9,18 @@ public class LogRequest implements NodeMessage {
     private int leaderId;
     private int term;
     private int logLength;
-    private int leaderCommit;
+    private int logTerm;
     private int commitLength;
     private List<Log> entries;
 
     public LogRequest() {
     }
 
-    public LogRequest(int leaderId, int term, int logLength, int leaderCommit, int commitLength, List<Log> entries) {
+    public LogRequest(int leaderId, int term, int logLength, int logTerm, int commitLength, List<Log> entries) {
         this.leaderId = leaderId;
         this.term = term;
         this.logLength = logLength;
-        this.leaderCommit = leaderCommit;
+        this.logTerm = logTerm;
         this.commitLength = commitLength;
         this.entries = entries;
     }
@@ -49,12 +49,12 @@ public class LogRequest implements NodeMessage {
         this.logLength = logLength;
     }
 
-    public int getLeaderCommit() {
-        return leaderCommit;
+    public int getLogTerm() {
+        return logTerm;
     }
 
-    public void setLeaderCommit(int leaderCommit) {
-        this.leaderCommit = leaderCommit;
+    public void setLogTerm(int logTerm) {
+        this.logTerm = logTerm;
     }
 
     public int getCommitLength() {
@@ -79,7 +79,7 @@ public class LogRequest implements NodeMessage {
                 "leaderId=" + leaderId +
                 ", term=" + term +
                 ", logLength=" + logLength +
-                ", leaderCommit=" + leaderCommit +
+                ", logTerm=" + logTerm +
                 ", commitLength=" + commitLength +
                 ", entries=" + entries +
                 '}';

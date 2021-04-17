@@ -73,6 +73,7 @@ public class Log {
         return "Log{" +
                 "nodeId=" + nodeId +
                 ", logOffset=" + logOffset +
+                ", term=" + term +
                 '}';
     }
 }
