@@ -47,4 +47,14 @@ public class LogResponse implements NodeMessage {
     public void setSuccess(boolean success) {
         this.success = success;
     }
+
+    @Override
+    public String toString() {
+        return "LogResponse{" +
+                "follower=" + follower +
+                ", term=" + term +
+                ", ack=" + ack +
+                ", success=" + success +
+                '}';
+    }
 }

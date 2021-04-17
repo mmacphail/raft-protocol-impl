@@ -38,4 +38,13 @@ public class VoteResponse implements NodeMessage {
     public void setGranted(boolean granted) {
         this.granted = granted;
     }
+
+    @Override
+    public String toString() {
+        return "VoteResponse{" +
+                "nodeId=" + nodeId +
+                ", term=" + term +
+                ", granted=" + granted +
+                '}';
+    }
 }

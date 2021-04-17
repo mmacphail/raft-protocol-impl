@@ -52,9 +52,9 @@ public class VoteRequest implements NodeMessage {
     public String toString() {
         return "VoteRequest{" +
                 "nodeId=" + nodeId +
-                ", currentTerm=" + term +
-                ", size=" + logLength +
-                ", lastTerm=" + logTerm +
+                ", term=" + term +
+                ", logLength=" + logLength +
+                ", logTerm=" + logTerm +
                 '}';
     }
 }

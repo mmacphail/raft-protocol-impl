@@ -5,18 +5,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import eu.macphail.raft.component.LogRepository;
 import eu.macphail.raft.component.MessageDispatcher;
 import eu.macphail.raft.entity.Log;
-import eu.macphail.raft.entity.message.*;
 import eu.macphail.raft.entity.Role;
+import eu.macphail.raft.entity.message.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-@Component
+@Service
 public class Node {
 
     @Value("${nodes}")
@@ -34,6 +34,7 @@ public class Node {
     @Value("${raft.replicate.log.interval.ms}")
     private int replicateLogIntervalMs;
 
+    // TODO persist variables on storage
     private int currentTerm;
     private Integer votedFor;
     private List<Log> log;
@@ -64,7 +65,7 @@ public class Node {
     public synchronized void init(int currentTerm, Integer votedFor, List<Log> log, int commitLength) {
         this.currentTerm = currentTerm;
         this.votedFor = votedFor;
-        loadLog();
+        this.log = log;
         this.commitLength = commitLength;
         this.currentRole = Role.FOLLOWER;
         this.currentLeader = null;
@@ -75,7 +76,9 @@ public class Node {
         LOG.debug("Node initialized {}", this);
         LOG.debug("Known nodes: {}", nodes);
 
-        launchLeaderTimeoutTimer();
+        Random rng = new Random();
+        electionTimerTimeoutMs += rng.nextInt(1500);
+        launchElectionTimer();
     }
 
     private Map<Integer, Integer> initNodesMap() {
@@ -87,6 +90,7 @@ public class Node {
     }
 
     public synchronized void onLeaderFailureOrElectionTimeout() {
+        LOG.debug("Leader failure or election timeout, voting for self and dispatch a vote request");
         currentTerm += 1;
         currentRole = Role.CANDIDATE;
         votedFor = nodeId;
@@ -99,27 +103,38 @@ public class Node {
         VoteRequest voteRequest = new VoteRequest(nodeId, currentTerm, log.size(), lastTerm);
         nodes.forEach(node -> dispatcher.dispatch(node, voteRequest));
 
-        startElectionTimer();
+        launchElectionTimer();
     }
 
     public synchronized void onVoteRequest(VoteRequest voteRequest) {
         int cId = voteRequest.getNodeId();
+        int cTerm = voteRequest.getTerm();
         int cLogTerm = voteRequest.getLogTerm();
         int cLogLength = voteRequest.getLogLength();
-        int myLogTerm = log.get(log.size() - 1).getTerm();
+        LOG.debug("Received vote request from node {} and term {}", cId, cTerm);
+        boolean notRequestFromMyself = !(currentRole == Role.CANDIDATE && cId == nodeId);
+        int myLogTerm = log.isEmpty() ? 0 : log.get(log.size() - 1).getTerm();
+        LOG.debug("myLogTerm: {}", myLogTerm);
         boolean logOk = cLogTerm > myLogTerm ||
                 (cLogTerm == myLogTerm && cLogLength >= log.size());
-        int term = voteRequest.getTerm();
-        boolean termOk = term > currentTerm ||
-                (term == currentTerm && (votedFor == null || votedFor == cId));
-
-        if (logOk && termOk) {
-            currentTerm = term;
-            currentRole = Role.FOLLOWER;
-            votedFor = cId;
-            dispatcher.dispatch(cId, new VoteResponse(this.nodeId, currentTerm, true));
-        } else {
-            dispatcher.dispatch(cId, new VoteResponse(this.nodeId, currentTerm, false));
+        LOG.debug("cLogTerm: {}", cLogTerm);
+        LOG.debug("cLogLength: {}", cLogLength);
+        LOG.debug("logOK: {}", logOk);
+        boolean termOk = cTerm > currentTerm ||
+                (cTerm == currentTerm && (votedFor == null || votedFor == cId));
+        LOG.debug("termOK: {}", termOk);
+        LOG.debug("votedFor: {}", votedFor);
+        if (notRequestFromMyself) {
+            if (logOk && termOk) {
+                currentTerm = cTerm;
+                currentRole = Role.FOLLOWER;
+                votedFor = cId;
+                LOG.debug("node {} will vote for {}", nodeId, cId);
+                dispatcher.dispatch(cId, new VoteResponse(this.nodeId, currentTerm, true));
+            } else {
+                LOG.debug("node {} will not vote for {}", nodeId, cId);
+                dispatcher.dispatch(cId, new VoteResponse(this.nodeId, currentTerm, false));
+            }
         }
     }
 
@@ -127,9 +142,13 @@ public class Node {
         int voterId = voteResponse.getNodeId();
         int term = voteResponse.getTerm();
         boolean granted = voteResponse.isGranted();
+        LOG.debug("Received vote response from {}. Response is {}.", voterId, granted);
+        LOG.debug("Current role: {}, term: {}, current term: {}.", currentRole, term, currentTerm);
         if (currentRole == Role.CANDIDATE && term == currentTerm && granted) {
             votesReceived.add(voterId);
+            LOG.debug("Votes received: {}", votesReceived);
             if (votesReceived.size() >= nodeQuorum()) {
+                LOG.debug("Node {} has been elected as the leader", nodeId);
                 currentRole = Role.LEADER;
                 currentLeader = this.nodeId;
                 cancelElectionTimer();
@@ -138,6 +157,7 @@ public class Node {
                     ackedLength.put(follower, 0);
                     replicateLog(this.nodeId, follower);
                 });
+                launchReplicateLogTimer();
             }
         } else if (term > currentTerm) {
             currentTerm = term;
@@ -154,17 +174,19 @@ public class Node {
         int leaderCommit = logRequest.getLeaderCommit();
         List<Log> entries = logRequest.getEntries();
 
+        LOG.debug("Received log request from {} at term {} (self term is {})", leaderId, term, currentTerm);
+
         if (term > currentTerm) {
             currentTerm = term;
             votedFor = null;
             currentRole = Role.FOLLOWER;
             currentLeader = leaderId;
-            launchLeaderTimeoutTimer();
+            LOG.debug("Accepting {} as leader, updating current term to {}, setting myself as follower", leaderId, currentTerm);
         }
         if (term == currentTerm && currentRole == Role.CANDIDATE) {
             currentRole = Role.FOLLOWER;
             currentLeader = leaderId;
-            launchLeaderTimeoutTimer();
+            LOG.debug("Accepting {} as leader, setting myself as follower", leaderId);
         }
         boolean logOk = log.size() >= logLength
                 && (logLength == 0
@@ -176,6 +198,7 @@ public class Node {
         } else {
             dispatcher.dispatch(leaderId, new LogResponse(nodeId, currentTerm, 0, false));
         }
+        launchLeaderTimeoutTimer();
     }
 
     public synchronized void onLogResponse(LogResponse response) {
@@ -206,9 +229,9 @@ public class Node {
                 .filter(l -> acks(l) >= minAcks)
                 .boxed().collect(Collectors.toList());
         Optional<Integer> max = ready.stream().max(Integer::compareTo);
-        if(!ready.isEmpty() && max.get() > commitLength
-            && log.get((max.get() - 1)).getTerm() == currentTerm) {
-            for(int i=commitLength; i<max.get(); i++) {
+        if (!ready.isEmpty() && max.get() > commitLength
+                && log.get((max.get() - 1)).getTerm() == currentTerm) {
+            for (int i = commitLength; i < max.get(); i++) {
                 dispatcher.deliver(log.get(i).getData());
             }
             commitLength = max.get();
@@ -321,51 +344,56 @@ public class Node {
                 .collect(Collectors.toList());
     }
 
-    private synchronized void startElectionTimer() {
-        if(electionTimer != null) {
+    private synchronized void launchElectionTimer() {
+        if (electionTimer != null) {
             electionTimer.cancel();
-            electionTimer = null;
-        } else {
-            electionTimer = new Timer(true);
-            electionTimer.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    onLeaderFailureOrElectionTimeout();
-                }
-            }, electionTimerTimeoutMs);
         }
+        electionTimer = new Timer(true);
+        electionTimer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                LOG.info("Election timeout");
+                onLeaderFailureOrElectionTimeout();
+            }
+        }, electionTimerTimeoutMs);
+        LOG.info("Election timeout timer started");
     }
 
     private synchronized void cancelElectionTimer() {
-        if(electionTimer != null) {
+        if (electionTimer != null) {
             electionTimer.cancel();
         }
+        LOG.info("Election timeout timer canceled");
     }
 
     private synchronized void launchLeaderTimeoutTimer() {
-        if(leaderTimer != null) {
+        if (leaderTimer != null) {
             leaderTimer.cancel();
         }
         leaderTimer = new Timer(true);
         leaderTimer.schedule(new TimerTask() {
             @Override
             public void run() {
+                LOG.info("Leader timeout");
                 onLeaderFailureOrElectionTimeout();
             }
         }, leaderTimeoutMs);
+        LOG.info("Leader timeout timer started");
     }
 
     private synchronized void launchReplicateLogTimer() {
-        if(replicateLogTimer != null) {
+        if (replicateLogTimer != null) {
             replicateLogTimer.cancel();
         }
         replicateLogTimer = new Timer(true);
         replicateLogTimer.schedule(new TimerTask() {
             @Override
             public void run() {
+                LOG.info("Replicate log timer ended");
                 sendReplicateLog();
             }
         }, replicateLogIntervalMs);
+        LOG.info("Replicate log timer started");
     }
 
     @Override

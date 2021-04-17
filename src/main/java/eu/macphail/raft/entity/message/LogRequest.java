@@ -72,4 +72,16 @@ public class LogRequest implements NodeMessage {
     public void setEntries(List<Log> entries) {
         this.entries = entries;
     }
+
+    @Override
+    public String toString() {
+        return "LogRequest{" +
+                "leaderId=" + leaderId +
+                ", term=" + term +
+                ", logLength=" + logLength +
+                ", leaderCommit=" + leaderCommit +
+                ", commitLength=" + commitLength +
+                ", entries=" + entries +
+                '}';
+    }
 }
